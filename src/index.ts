@@ -12,7 +12,7 @@ import { z } from "zod";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -305,9 +305,19 @@ export function createServer(apiKey: string, apiBase: string): Server {
 // Start (only when run directly, not when imported by tests)
 // ---------------------------------------------------------------------------
 
-const isMain =
-  process.argv[1] &&
-  import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    const scriptPath = realpathSync(process.argv[1]);
+    const modulePath = fileURLToPath(import.meta.url);
+    return scriptPath === modulePath;
+  } catch {
+    return false;
+  }
+})();
 
 if (isMain) {
   const apiKey = process.env.JOTBIRD_API_KEY;
