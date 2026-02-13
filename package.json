@@ -1,0 +1,49 @@
+{
+  "name": "mcp-server-jotbird",
+  "version": "0.1.0",
+  "description": "MCP server for JotBird – publish Markdown documents from any LLM",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "mcp-server-jotbird": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "jotbird",
+    "markdown",
+    "publishing"
+  ],
+  "author": "JotBird LLC",
+  "license": "MIT",
+  "homepage": "https://www.jotbird.com/mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jotbirdhq/mcp-server-jotbird.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jotbirdhq/mcp-server-jotbird/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.18"
+  }
+}
