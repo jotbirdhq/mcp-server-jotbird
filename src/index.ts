@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
-// Polyfill fetch for Node < 18.13 where it isn't globally available.
-// undici ships with Node 18+ so no extra dependency is needed.
+// Polyfill fetch for Node < 18 where it isn't globally available.
 if (typeof globalThis.fetch === "undefined") {
-  const { fetch, Headers, Request, Response } = await import("undici");
-  Object.assign(globalThis, { fetch, Headers, Request, Response });
+  const mod = await import("node-fetch");
+  Object.assign(globalThis, {
+    fetch: mod.default,
+    Headers: mod.Headers,
+    Request: mod.Request,
+    Response: mod.Response,
+  });
 }
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -19,7 +23,7 @@ import { z } from "zod";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 
 // ---------------------------------------------------------------------------
 // Types
