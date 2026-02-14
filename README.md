@@ -47,11 +47,20 @@ claude mcp add jotbird -e JOTBIRD_API_KEY=jb_your_key_here -- npx -y mcp-server-
 <details>
 <summary><strong>ChatGPT</strong></summary>
 
-ChatGPT connectors require a remote (HTTP) MCP server — they don't support local stdio servers directly. To use this server with ChatGPT:
+ChatGPT requires a remote (HTTP) MCP server — it doesn't support local stdio servers directly. You'll need to run a proxy that exposes the server over HTTP with a public tunnel:
 
-1. Host the server behind an HTTP transport (e.g. using [`mcp-proxy`](https://github.com/punkpeye/mcp-proxy) or [`supergateway`](https://github.com/supercorp-ai/supergateway))
-2. In ChatGPT, go to **Settings > Connectors > Create**
-3. Enter the URL of your hosted server
+```bash
+JOTBIRD_API_KEY=jb_your_key_here npx mcp-proxy --shell --tunnel -- npx -y mcp-server-jotbird
+```
+
+This starts the server and prints a public tunnel URL (e.g. `https://funny-eel-44.tunnel.gla.ma`).
+
+Then in ChatGPT:
+
+1. Go to **Settings > Apps > Advanced settings** and enable **Developer mode**
+2. Click **New App**, give it a name, and paste the tunnel URL with `/mcp` appended (e.g. `https://funny-eel-44.tunnel.gla.ma/mcp`)
+3. Set authentication to **No Auth** and click **Create**
+4. In a new chat, select **Developer mode** from the model picker and enable the app
 
 See [OpenAI's MCP docs](https://platform.openai.com/docs/mcp) for details.
 
@@ -79,7 +88,7 @@ Edit `.gemini/settings.json` (project-level) or `~/.gemini/settings.json` (globa
 Or add via CLI:
 
 ```bash
-gemini mcp add jotbird -- npx -y mcp-server-jotbird
+gemini mcp add jotbird npx -e JOTBIRD_API_KEY=jb_your_key_here -- -y mcp-server-jotbird
 ```
 
 See [Gemini CLI MCP docs](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html) for details.
