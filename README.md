@@ -49,7 +49,7 @@ claude mcp add jotbird -e JOTBIRD_API_KEY=jb_your_key_here -- npx -y mcp-server-
 
 ChatGPT connectors require a remote (HTTP) MCP server — they don't support local stdio servers directly. To use this server with ChatGPT:
 
-1. Host the server behind an HTTP transport (e.g. using [`mcp-proxy`](https://github.com/nichochar/mcp-proxy) or [`supergateway`](https://github.com/nichochar/supergateway))
+1. Host the server behind an HTTP transport (e.g. using [`mcp-proxy`](https://github.com/punkpeye/mcp-proxy) or [`supergateway`](https://github.com/supercorp-ai/supergateway))
 2. In ChatGPT, go to **Settings > Connectors > Create**
 3. Enter the URL of your hosted server
 
