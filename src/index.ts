@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+// Polyfill fetch for Node < 18.13 where it isn't globally available.
+// undici ships with Node 18+ so no extra dependency is needed.
+if (typeof globalThis.fetch === "undefined") {
+  const { fetch, Headers, Request, Response } = await import("undici");
+  Object.assign(globalThis, { fetch, Headers, Request, Response });
+}
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -12,7 +19,7 @@ import { z } from "zod";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.3";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,7 +61,7 @@ const PublishArgs = z.object({
     .string()
     .optional()
     .describe(
-      "Optional slug. If it matches an existing document you own, that document is updated."
+      "Slug of an existing page to update. Omit to publish a new page with an auto-generated slug."
     ),
 });
 
@@ -155,8 +162,9 @@ export function createServer(apiKey: string, apiBase: string): Server {
             slug: {
               type: "string",
               description:
-                "URL slug (e.g. 'my-notes'). If this slug already exists and " +
-                "you own it, the page is updated in place. Omit to auto-generate.",
+                "Slug of an existing page to update. " +
+                "Custom slugs cannot be created — omit this to publish a new page with an auto-generated slug. " +
+                "Use list_documents to find slugs of existing pages.",
             },
           },
           required: ["markdown"],

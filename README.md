@@ -117,7 +117,7 @@ Publish Markdown content as a formatted web page with a shareable URL. To update
 |-----------|----------|-------------|
 | `markdown` | Yes | Markdown content (max 256 KB). Supports footnotes, task lists, definition lists, math (`$…$` and `$$…$$`), and inline HTML. |
 | `title` | No | Page title. If omitted, the first H1 in the Markdown is used. |
-| `slug` | No | URL slug (e.g. `my-notes`). If this slug already exists and you own it, the page is updated in place. Omit to auto-generate. |
+| `slug` | No | Slug of an existing page to update. Custom slugs cannot be created — omit this to publish a new page with an auto-generated slug. Use `list_documents` to find slugs. |
 
 ### `list_documents`
 
