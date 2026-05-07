@@ -23,7 +23,7 @@ import { z } from "zod";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.5";
+const VERSION = "0.1.6";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,12 +33,14 @@ interface PublishParams {
   markdown: string;
   title?: string;
   slug?: string;
+  namespaced?: boolean;
 }
 
 interface PublishResult {
   slug: string;
   url: string;
   title?: string;
+  username?: string | null;
   expiresAt: string | null;
   ttlDays: number | null;
   created: boolean;
@@ -48,6 +50,7 @@ interface Document {
   slug: string;
   title: string;
   url: string;
+  username: string | null;
   source: string;
   updatedAt: string;
   publishedAt: string;
@@ -65,12 +68,29 @@ const PublishArgs = z.object({
     .string()
     .optional()
     .describe(
-      "Slug of an existing page to update. Omit to publish a new page with an auto-generated slug."
+      "For flat documents: slug of an existing page to update. " +
+      "For namespaced documents (namespaced: true): required — publish at @username/slug. " +
+      "Omit (with namespaced: false/absent) to publish a new page with an auto-generated slug."
+    ),
+  namespaced: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, publish at your namespace: share.jotbird.com/@username/slug. " +
+      "Requires a Pro subscription and a username set in Account Settings. " +
+      "A slug is required when namespaced is true."
     ),
 });
 
 const DeleteArgs = z.object({
   slug: z.string().describe("The slug of the document to delete"),
+  namespaced: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true, delete the document at @username/slug instead of the flat URL. " +
+      "Requires a Pro subscription and a username set in Account Settings."
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -124,9 +144,11 @@ export function createServer(apiKey: string, apiBase: string): Server {
     return apiRequest<{ documents: Document[] }>("/api/v1/documents");
   }
 
-  async function deleteDocument(slug: string): Promise<{ ok: boolean }> {
+  async function deleteDocument(slug: string, namespaced?: boolean): Promise<{ ok: boolean }> {
+    const params = new URLSearchParams({ slug });
+    if (namespaced) params.set("namespaced", "true");
     return apiRequest<{ ok: boolean }>(
-      `/api/v1/documents?slug=${encodeURIComponent(slug)}`,
+      `/api/v1/documents?${params.toString()}`,
       { method: "DELETE" }
     );
   }
@@ -147,7 +169,9 @@ export function createServer(apiKey: string, apiBase: string): Server {
           "shareable URL on JotBird. Use when the user wants to share, publish, " +
           "or host written content online. Supports full Markdown including " +
           "headings, lists, code blocks, tables, footnotes, and math. " +
-          "To update an existing page, pass its slug.",
+          "To update an existing page, pass its slug. " +
+          "Pro users with a username can publish at a permanent namespaced URL " +
+          "(share.jotbird.com/@username/slug) by passing namespaced: true and a slug.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -166,9 +190,17 @@ export function createServer(apiKey: string, apiBase: string): Server {
             slug: {
               type: "string",
               description:
-                "Slug of an existing page to update. " +
-                "Custom slugs cannot be created — omit this to publish a new page with an auto-generated slug. " +
+                "For flat documents: slug of an existing page to update. " +
+                "Omit to publish a new page with an auto-generated slug. " +
+                "For namespaced documents (namespaced: true): required — publish at @username/slug. " +
                 "Use list_documents to find slugs of existing pages.",
+            },
+            namespaced: {
+              type: "boolean",
+              description:
+                "When true, publish at your namespace: share.jotbird.com/@username/slug. " +
+                "Requires a Pro subscription and a username set in Account Settings. " +
+                "A slug must be provided.",
             },
           },
           required: ["markdown"],
@@ -190,7 +222,7 @@ export function createServer(apiKey: string, apiBase: string): Server {
         description:
           "Permanently delete a published JotBird page and its shareable URL. " +
           "Use when the user wants to take down or remove a published page. " +
-          "This cannot be undone.",
+          "This cannot be undone. For namespaced pages (@username/slug), pass namespaced: true.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -199,6 +231,12 @@ export function createServer(apiKey: string, apiBase: string): Server {
               description:
                 "Slug of the page to delete (e.g. 'my-notes'). " +
                 "Use list_documents to find slugs.",
+            },
+            namespaced: {
+              type: "boolean",
+              description:
+                "When true, delete the document at @username/slug instead of the flat URL. " +
+                "Requires a Pro subscription and a username set in Account Settings.",
             },
           },
           required: ["slug"],
@@ -213,13 +251,16 @@ export function createServer(apiKey: string, apiBase: string): Server {
     try {
       switch (name) {
         case "publish": {
-          const { markdown, title, slug } = PublishArgs.parse(args);
-          const result = await publishDocument({ markdown, title, slug });
+          const { markdown, title, slug, namespaced } = PublishArgs.parse(args);
+          const result = await publishDocument({ markdown, title, slug, namespaced });
 
           const action = result.created ? "Published" : "Updated";
           const expiry = result.expiresAt
             ? `\nExpires: ${result.expiresAt}`
             : "\nExpires: never (Pro)";
+          const identifier = result.username
+            ? `@${result.username}/${result.slug}`
+            : result.slug;
 
           return {
             content: [
@@ -227,7 +268,7 @@ export function createServer(apiKey: string, apiBase: string): Server {
                 type: "text" as const,
                 text:
                   `${action}: ${result.url}\n` +
-                  `Slug: ${result.slug}\n` +
+                  `Slug: ${identifier}\n` +
                   `Title: ${result.title ?? "(untitled)"}` +
                   expiry,
               },
@@ -248,7 +289,8 @@ export function createServer(apiKey: string, apiBase: string): Server {
 
           const lines = documents.map((d) => {
             const expires = d.expiresAt ?? "never";
-            return `- **${d.title || "(untitled)"}**\n  ${d.url}\n  slug: ${d.slug} · expires: ${expires}`;
+            const identifier = d.username ? `@${d.username}/${d.slug}` : d.slug;
+            return `- **${d.title || "(untitled)"}**\n  ${d.url}\n  slug: ${identifier} · expires: ${expires}`;
           });
 
           return {
@@ -262,8 +304,8 @@ export function createServer(apiKey: string, apiBase: string): Server {
         }
 
         case "delete": {
-          const { slug } = DeleteArgs.parse(args);
-          await deleteDocument(slug);
+          const { slug, namespaced } = DeleteArgs.parse(args);
+          await deleteDocument(slug, namespaced);
           return {
             content: [
               {

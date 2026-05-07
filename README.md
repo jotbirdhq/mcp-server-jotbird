@@ -115,22 +115,24 @@ Ask your LLM things like:
 - *"Update my published page 'my-notes' with this new section"*
 - *"Show me all my published pages"*
 - *"Take down the page with slug 'old-draft'"*
+- *"Publish this at my namespace as 'project-notes'"* (Pro)
 
 ## Tools
 
 ### `publish`
 
-Publish Markdown content as a formatted web page with a shareable URL. To update an existing page, pass its slug.
+Publish Markdown content as a formatted web page with a shareable URL. To update an existing page, pass its slug. Pro users with a username can publish at a permanent namespaced URL by passing `namespaced: true`.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `markdown` | Yes | Markdown content (max 256 KB). Supports footnotes, task lists, definition lists, math (`$…$` and `$$…$$`), and inline HTML. |
 | `title` | No | Page title. If omitted, the first H1 in the Markdown is used. |
-| `slug` | No | Slug of an existing page to update. Custom slugs cannot be created — omit this to publish a new page with an auto-generated slug. Use `list_documents` to find slugs. |
+| `slug` | No | For flat documents: slug of an existing page to update. Omit to publish a new page with an auto-generated slug. For namespaced documents (`namespaced: true`): required — publishes at `@username/slug`. Use `list_documents` to find slugs. |
+| `namespaced` | No | When `true`, publish at your namespace: `share.jotbird.com/@username/slug`. Requires Pro and a username set in Account Settings. |
 
 ### `list_documents`
 
-List the user's published pages. Returns each page's title, URL, slug, and expiration date.
+List the user's published pages. Returns each page's title, URL, slug, expiration date, and username (for namespaced pages).
 
 No parameters.
 
@@ -141,6 +143,16 @@ Permanently delete a published page and its shareable URL. Cannot be undone.
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `slug` | Yes | Slug of the page to delete. Use `list_documents` to find slugs. |
+| `namespaced` | No | When `true`, delete the document at `@username/slug` instead of the flat URL. Requires Pro and a username. |
+
+## Namespaced URLs (Pro)
+
+Pro users with a username set in Account Settings can publish at permanent, human-readable URLs like `share.jotbird.com/@username/my-page`. Just ask your AI:
+
+> "Publish this at my namespace as 'project-notes'."
+> → `share.jotbird.com/@clayton-myers/project-notes`
+
+Namespaced pages never expire and keep the same URL across updates. Set your username in **Account Settings** at [jotbird.com](https://www.jotbird.com).
 
 ## Limits
 

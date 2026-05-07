@@ -125,6 +125,34 @@ describe("publish", () => {
     expect(text).toContain("Expires: never (Pro)");
   });
 
+  it("publishes namespaced and shows @username/slug", async () => {
+    mockFetchResponse({
+      slug: "my-page",
+      url: "https://share.jotbird.com/@clayton-myers/my-page",
+      title: "My Page",
+      username: "clayton-myers",
+      expiresAt: null,
+      ttlDays: null,
+      created: true,
+    });
+
+    const result = await client.callTool({
+      name: "publish",
+      arguments: { markdown: "# My Page", slug: "my-page", namespaced: true },
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("Published:");
+    expect(text).toContain("https://share.jotbird.com/@clayton-myers/my-page");
+    expect(text).toContain("Slug: @clayton-myers/my-page");
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${TEST_API_BASE}/api/v1/publish`);
+    const body = JSON.parse(opts.body);
+    expect(body.namespaced).toBe(true);
+    expect(body.slug).toBe("my-page");
+  });
+
   it("shows (untitled) when no title is returned", async () => {
     mockFetchResponse({
       slug: "abc",
@@ -162,6 +190,7 @@ describe("list_documents", () => {
           slug: "doc-one",
           title: "First Doc",
           url: "https://share.jotbird.com/doc-one",
+          username: null,
           source: "mcp",
           updatedAt: "2025-01-01",
           publishedAt: "2025-01-01",
@@ -171,6 +200,7 @@ describe("list_documents", () => {
           slug: "doc-two",
           title: "Second Doc",
           url: "https://share.jotbird.com/doc-two",
+          username: null,
           source: "mcp",
           updatedAt: "2025-01-02",
           publishedAt: "2025-01-02",
@@ -190,6 +220,42 @@ describe("list_documents", () => {
     expect(text).toContain("doc-one");
     expect(text).toContain("Second Doc");
     expect(text).toContain("expires: never");
+  });
+
+  it("shows @username/slug for namespaced documents", async () => {
+    mockFetchResponse({
+      documents: [
+        {
+          slug: "my-page",
+          title: "My Page",
+          url: "https://share.jotbird.com/@clayton-myers/my-page",
+          username: "clayton-myers",
+          source: "mcp",
+          updatedAt: "2025-01-01",
+          publishedAt: "2025-01-01",
+          expiresAt: null,
+        },
+        {
+          slug: "flat-doc",
+          title: "Flat Doc",
+          url: "https://share.jotbird.com/flat-doc",
+          username: null,
+          source: "mcp",
+          updatedAt: "2025-01-02",
+          publishedAt: "2025-01-02",
+          expiresAt: null,
+        },
+      ],
+    });
+
+    const result = await client.callTool({
+      name: "list_documents",
+      arguments: {},
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("slug: @clayton-myers/my-page");
+    expect(text).toContain("slug: flat-doc");
   });
 
   it("returns message when no documents exist", async () => {
@@ -218,6 +284,21 @@ describe("delete", () => {
     // Verify correct URL with encoded slug
     const [url, opts] = fetchMock.mock.calls[0];
     expect(url).toBe(`${TEST_API_BASE}/api/v1/documents?slug=old-draft`);
+    expect(opts.method).toBe("DELETE");
+  });
+
+  it("deletes a namespaced document with namespaced=true query param", async () => {
+    mockFetchResponse({ ok: true });
+
+    const result = await client.callTool({
+      name: "delete",
+      arguments: { slug: "my-page", namespaced: true },
+    });
+
+    expect(textOf(result)).toBe('Deleted document "my-page".');
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${TEST_API_BASE}/api/v1/documents?slug=my-page&namespaced=true`);
     expect(opts.method).toBe("DELETE");
   });
 
