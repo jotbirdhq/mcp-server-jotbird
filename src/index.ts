@@ -18,12 +18,18 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { createRequire } from "node:module";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const VERSION = "0.1.6";
+// Read the version from package.json so the User-Agent and MCP server identity
+// always match the published release instead of a hand-edited literal that
+// drifts. tsc emits dist/index.js flat, so "../package.json" is the package
+// root. createRequire avoids needing resolveJsonModule for a static import.
+const require = createRequire(import.meta.url);
+const VERSION: string = require("../package.json").version;
 
 // ---------------------------------------------------------------------------
 // Types
