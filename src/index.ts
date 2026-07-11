@@ -63,6 +63,23 @@ interface Document {
   expiresAt: string | null;
 }
 
+// The public settings representation returned by both GET and PATCH
+// /api/v1/documents/{slug}/settings (PageSettingsView in openapi.yaml).
+// `tags` is optional, not required: the documents list stays DB-only and can lag
+// for legacy (pre-2026-07) docs, so don't let the type promise a field the API
+// may omit — formatSettings guards it.
+interface PageSettingsView {
+  slug: string;
+  username: string | null;
+  url: string;
+  title: string | null;
+  theme: string;
+  hideBranding: boolean;
+  visibility: "unlisted" | "password" | "public";
+  tags?: string[];
+  expiresAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Argument schemas
 // ---------------------------------------------------------------------------
@@ -86,18 +103,160 @@ const PublishArgs = z.object({
       "Requires a Pro subscription and a username set in Account Settings. " +
       "A slug is required when namespaced is true."
     ),
-});
+})
+  // Strict for the same reason as the settings schemas: a stripped key is a
+  // silent partial success. A model that passes `theme` here (settings belong to
+  // update_settings) should be told, not quietly published with the default.
+  .strict();
 
-const DeleteArgs = z.object({
-  slug: z.string().describe("The slug of the document to delete"),
+const THEMES = ["default", "minimal", "essay", "terminal"] as const;
+const VISIBILITIES = ["unlisted", "password", "public"] as const;
+
+/**
+ * Split an "@username/slug" identifier into its parts.
+ *
+ * list_documents reports a namespaced page's identity as "@username/slug", and
+ * the tool descriptions point at it to find slugs — so that string is exactly
+ * what a model passes back. Taken literally it addresses a FLAT slug that does
+ * not exist, and the call 404s on a page that plainly does. Mirrors
+ * parseSlugValue/resolveTarget in the CLI.
+ */
+function parseTarget(
+  slug: string,
+  namespaced?: boolean
+): { slug: string; namespaced: boolean } {
+  if (slug.startsWith("@") && slug.includes("/")) {
+    return { slug: slug.slice(slug.indexOf("/") + 1), namespaced: true };
+  }
+  return { slug, namespaced: Boolean(namespaced) };
+}
+
+// Every tool that addresses an existing page shares this target, and it
+// NORMALIZES ITSELF: parsing yields the resolved {slug, namespaced} and nothing
+// else, so a handler cannot forget to call parseTarget (three hand-written call
+// sites is how the "@username/slug" bug shipped in the first place). `target`
+// preserves what the caller actually typed, for echoing back in messages.
+//
+// The post-transform length check is the load-bearing half: "@user/" splits to
+// an EMPTY slug, which would otherwise sail through `z.string()` and request
+// `/api/v1/documents//settings` — and `delete` would then cheerfully confirm a
+// deletion that never happened.
+//
+// `.strict()` matters for the same class of reason: zod's default is to STRIP
+// unknown keys, which would turn a patch the server rejects (its contract 400s
+// on an unknown key) into a silent partial success. `tags` is the trap —
+// get_settings reports them, so a model naturally tries to set them, and a
+// stripped key would come back as "Settings updated".
+const TargetShape = {
+  slug: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("Slug of the page, or the full @username/slug identifier"),
   namespaced: z
     .boolean()
     .optional()
-    .describe(
-      "When true, delete the document at @username/slug instead of the flat URL. " +
-      "Requires a Pro subscription and a username set in Account Settings."
-    ),
-});
+    .describe("When true, resolve the slug at @username/slug instead of the flat URL."),
+};
+
+function normalizeTarget<T extends { slug: string; namespaced?: boolean }>(a: T) {
+  return { ...a, ...parseTarget(a.slug, a.namespaced), target: a.slug };
+}
+
+const EMPTY_SLUG =
+  'slug must name a page, e.g. "my-notes" or "@username/my-notes".';
+const hasSlug = (a: { slug: string }) => a.slug.length > 0;
+
+const TargetArgs = z.object(TargetShape).strict();
+
+// get_settings and delete take nothing but a target, so they share one schema.
+const NormalizedTargetArgs = TargetArgs.transform(normalizeTarget).refine(
+  hasSlug,
+  { message: EMPTY_SLUG, path: ["slug"] }
+);
+
+const GetSettingsArgs = NormalizedTargetArgs;
+const DeleteArgs = NormalizedTargetArgs;
+
+const UpdateSettingsArgs = TargetArgs.extend({
+  theme: z.enum(THEMES).optional().describe("Page theme"),
+  hideBranding: z
+    .boolean()
+    .optional()
+    .describe("Hide the JotBird footer branding (true is Pro-only)"),
+  visibility: z.enum(VISIBILITIES).optional().describe("Page visibility state"),
+  password: z
+    .string()
+    .optional()
+    .describe("Page password; required with (and only valid with) visibility \"password\""),
+})
+  // These mirror the server's validation. Rejecting locally matters because a
+  // PATCH is charged against the hourly rate limit BEFORE validation — a
+  // request the server will always refuse would still burn a write.
+  //
+  // One superRefine rather than chained .refine()s: chained refinements abort at
+  // the first failure, so `{password}` with no visibility reported only the
+  // generic "provide at least one setting" and never mentioned the password it
+  // was about to drop. superRefine collects every issue, and the explicit paths
+  // keep the rendered message field-anchored.
+  .superRefine((a, ctx) => {
+    if (a.password !== undefined && a.visibility !== "password") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["password"],
+        message: 'password is only valid with visibility "password".',
+      });
+    }
+    if (a.visibility === "password" && (a.password ?? "") === "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["password"],
+        message: 'visibility "password" requires a non-empty password.',
+      });
+    }
+    if (
+      a.theme === undefined &&
+      a.hideBranding === undefined &&
+      a.visibility === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message:
+          "Provide at least one setting to change: theme, hideBranding, or visibility.",
+      });
+    }
+  })
+  .transform(normalizeTarget)
+  .refine(hasSlug, { message: EMPTY_SLUG, path: ["slug"] });
+
+// Derived from the schema rather than hand-written, so the two can't drift: a
+// hand-rolled `theme?: string` would typecheck a value the schema forbids.
+type SettingsPatch = Omit<
+  z.infer<typeof UpdateSettingsArgs>,
+  "slug" | "namespaced" | "target"
+>;
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+function formatSettings(s: PageSettingsView): string {
+  const identifier = s.username ? `@${s.username}/${s.slug}` : s.slug;
+  const lines = [
+    `Slug: ${identifier}`,
+    `URL: ${s.url}`,
+    // `||`, not `??`: an untitled page comes back as "" as readily as null, and
+    // `??` would render a bare "Title: ".
+    `Title: ${s.title || "(untitled)"}`,
+    `Theme: ${s.theme}`,
+    `Branding: ${s.hideBranding ? "hidden" : "shown"}`,
+    `Visibility: ${s.visibility}`,
+  ];
+  if (s.tags?.length) lines.push(`Tags: ${s.tags.join(", ")}`);
+  lines.push(`Expires: ${s.expiresAt ?? "never"}`);
+  return lines.join("\n");
+}
 
 // ---------------------------------------------------------------------------
 // MCP server factory (exported for testing)
@@ -129,9 +288,14 @@ export function createServer(apiKey: string, apiBase: string): Server {
           `Rate limit exceeded.${retryAfter ? ` Try again in ${retryAfter} seconds.` : ""}`
         );
       }
-      const msg =
-        (data as Record<string, unknown>)?.error ?? `HTTP ${res.status}`;
-      throw new Error(String(msg));
+      const body = data as Record<string, unknown> | null;
+      let msg = String(body?.error ?? `HTTP ${res.status}`);
+      // Pro-gated settings 403s name the offending setting — surface it so the
+      // model can tell the user which feature needs Pro instead of guessing.
+      if (res.status === 403 && body?.setting) {
+        msg += ` (Pro required for: ${String(body.setting)})`;
+      }
+      throw new Error(msg);
     }
 
     return data as T;
@@ -157,6 +321,30 @@ export function createServer(apiKey: string, apiBase: string): Server {
       `/api/v1/documents?${params.toString()}`,
       { method: "DELETE" }
     );
+  }
+
+  function settingsPath(slug: string, namespaced?: boolean): string {
+    let path = `/api/v1/documents/${encodeURIComponent(slug)}/settings`;
+    if (namespaced) path += "?namespaced=true";
+    return path;
+  }
+
+  async function getSettings(
+    slug: string,
+    namespaced?: boolean
+  ): Promise<PageSettingsView> {
+    return apiRequest<PageSettingsView>(settingsPath(slug, namespaced));
+  }
+
+  async function updateSettings(
+    slug: string,
+    patch: SettingsPatch,
+    namespaced?: boolean
+  ): Promise<PageSettingsView> {
+    return apiRequest<PageSettingsView>(settingsPath(slug, namespaced), {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
   }
 
   // -- Server setup --
@@ -235,14 +423,101 @@ export function createServer(apiKey: string, apiBase: string): Server {
             slug: {
               type: "string",
               description:
-                "Slug of the page to delete (e.g. 'my-notes'). " +
+                "Slug of the page to delete (e.g. 'my-notes'), or the full " +
+                "'@username/my-notes' identifier for a namespaced page. " +
                 "Use list_documents to find slugs.",
             },
             namespaced: {
               type: "boolean",
               description:
                 "When true, delete the document at @username/slug instead of the flat URL. " +
+                "Unnecessary if the slug already starts with '@username/'. " +
                 "Requires a Pro subscription and a username set in Account Settings.",
+            },
+          },
+          required: ["slug"],
+        },
+      },
+      {
+        name: "get_settings",
+        description:
+          "Get a published JotBird page's settings: theme, branding, visibility " +
+          "(unlisted/password/public), tags, and expiration. Use before changing " +
+          "settings or when the user asks how a page is configured. The page " +
+          "password is write-only and never returned.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slug: {
+              type: "string",
+              description:
+                "Slug of the page (e.g. 'my-notes'), or the full '@username/my-notes' " +
+                "identifier for a namespaced page. Use list_documents to find slugs.",
+            },
+            namespaced: {
+              type: "boolean",
+              description:
+                "When true, resolve the slug at @username/slug instead of the flat URL. " +
+                "Unnecessary if the slug already starts with '@username/'.",
+            },
+          },
+          required: ["slug"],
+        },
+      },
+      {
+        name: "update_settings",
+        description:
+          "Update a published JotBird page's settings: theme, branding, and " +
+          "visibility. Only the provided fields change; others are preserved. " +
+          "Pro-only: non-default themes, hiding branding, and password " +
+          "protection (free accounts can clear these and switch " +
+          "unlisted/public). Visibility semantics: 'unlisted' (default — not " +
+          "indexed by search engines), 'public' (indexable, listed in the " +
+          "sitemap), 'password' (Pro — requires the password argument; setting " +
+          "a visibility clears any previous password). The API reflects changes " +
+          "immediately, but the live page can take up to about a minute to " +
+          "reflect a relaxed visibility (enabling password protection is " +
+          "instant) — a briefly stale page is not a failed update.",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            slug: {
+              type: "string",
+              description:
+                "Slug of the page to update (e.g. 'my-notes'), or the full " +
+                "'@username/my-notes' identifier for a namespaced page. " +
+                "Use list_documents to find slugs.",
+            },
+            namespaced: {
+              type: "boolean",
+              description:
+                "When true, resolve the slug at @username/slug instead of the flat URL. " +
+                "Unnecessary if the slug already starts with '@username/'.",
+            },
+            theme: {
+              type: "string",
+              enum: [...THEMES],
+              description:
+                "Page theme. Any non-default theme requires a Pro subscription.",
+            },
+            hideBranding: {
+              type: "boolean",
+              description:
+                "Hide the 'Published with JotBird' footer. Enabling requires Pro; " +
+                "any account can set it back to false.",
+            },
+            visibility: {
+              type: "string",
+              enum: [...VISIBILITIES],
+              description:
+                "Page visibility: 'unlisted' (default), 'public' (search-indexable), " +
+                "or 'password' (Pro; requires the password argument).",
+            },
+            password: {
+              type: "string",
+              description:
+                "Page password. Required with (and only valid with) visibility " +
+                "'password'. Write-only — it is never echoed back.",
             },
           },
           required: ["slug"],
@@ -310,13 +585,54 @@ export function createServer(apiKey: string, apiBase: string): Server {
         }
 
         case "delete": {
-          const { slug, namespaced } = DeleteArgs.parse(args);
+          const { slug, namespaced, target } = DeleteArgs.parse(args);
           await deleteDocument(slug, namespaced);
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Deleted document "${slug}".`,
+                text: `Deleted document "${target}".`,
+              },
+            ],
+          };
+        }
+
+        case "get_settings": {
+          const { slug, namespaced } = GetSettingsArgs.parse(args);
+          const settings = await getSettings(slug, namespaced);
+          return {
+            content: [{ type: "text" as const, text: formatSettings(settings) }],
+          };
+        }
+
+        case "update_settings": {
+          const { slug, namespaced, target: _target, ...patch } =
+            UpdateSettingsArgs.parse(args);
+
+          // Pre-flight every write with the GET (which is not rate-limited):
+          // PATCH is charged against the hourly write limit BEFORE validation,
+          // even when it 404s, so a mistyped slug would otherwise silently eat
+          // one of a free account's 10 writes per hour.
+          //
+          // The result is deliberately NOT used to skip a PATCH whose values
+          // already match. Re-applying identical settings is the documented way
+          // to repair drift and to finish a partially-applied patch ("a retry of
+          // the same PATCH is idempotent" — PAGE_SETTINGS_ARCHITECTURE.md), and
+          // the CLI always writes. Saving a rate-limit unit isn't worth being the
+          // one client that can't force a re-apply.
+          await getSettings(slug, namespaced);
+
+          const settings = await updateSettings(slug, patch, namespaced);
+          const note =
+            patch.visibility !== undefined
+              ? "\n\nNote: the live page can take up to about a minute to reflect " +
+                "a visibility change (enabling password protection is instant)."
+              : "";
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Settings updated.\n${formatSettings(settings)}${note}`,
               },
             ],
           };
@@ -332,8 +648,10 @@ export function createServer(apiKey: string, apiBase: string): Server {
       }
     } catch (error) {
       if (error instanceof z.ZodError) {
+        // Cross-field refinements can carry an empty path; prefixing those with
+        // ": " renders a stray double colon ("Validation error: : Provide …").
         const issues = error.issues
-          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .map((i) => (i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message))
           .join("; ");
         return {
           content: [

@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io/) server for [JotBird](https://www.jotbird.com) that lets any LLM publish Markdown as beautifully formatted, shareable web pages.
 
-Write a document in conversation, publish it with one tool call, and get back a live URL. Supports full Markdown — headings, code blocks, tables, footnotes, math, task lists, and more. Update or delete pages by slug.
+Write a document in conversation, publish it with one tool call, and get back a live URL. Supports full Markdown — headings, code blocks, tables, footnotes, math, task lists, and more. Update or delete pages by slug, and view or change page settings (theme, branding, visibility, password protection).
 
 Works with Claude, ChatGPT, Gemini, and any MCP-compatible client.
 
@@ -116,6 +116,10 @@ Ask your LLM things like:
 - *"Show me all my published pages"*
 - *"Take down the page with slug 'old-draft'"*
 - *"Publish this at my namespace as 'project-notes'"* (Pro)
+- *"What are the settings on my page 'my-notes'?"*
+- *"Switch my page 'launch-plan' to the essay theme"* (Pro)
+- *"Make my page 'resume' public so search engines can find it"*
+- *"Password-protect my page 'board-deck'"* (Pro)
 
 ## Tools
 
@@ -142,8 +146,34 @@ Permanently delete a published page and its shareable URL. Cannot be undone.
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `slug` | Yes | Slug of the page to delete. Use `list_documents` to find slugs. |
-| `namespaced` | No | When `true`, delete the document at `@username/slug` instead of the flat URL. Requires Pro and a username. |
+| `slug` | Yes | Slug of the page to delete, or the full `@username/slug` identifier for a namespaced page. Use `list_documents` to find slugs. |
+| `namespaced` | No | When `true`, delete the document at `@username/slug` instead of the flat URL. Unnecessary if the slug already starts with `@username/`. Requires Pro and a username. |
+
+### `get_settings`
+
+Get a published page's settings: theme, branding, visibility, tags, and expiration. The page password is write-only and never returned.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `slug` | Yes | Slug of the page, or the full `@username/slug` identifier. Use `list_documents` to find slugs. |
+| `namespaced` | No | When `true`, resolve the slug at `@username/slug` instead of the flat URL. Unnecessary if the slug already starts with `@username/`. |
+
+### `update_settings`
+
+Update a published page's settings. Only the fields you pass change; everything else is preserved. Enabling a Pro feature (non-default theme, `hideBranding: true`, password protection) requires a Pro subscription — any account can clear them.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `slug` | Yes | Slug of the page to update, or the full `@username/slug` identifier. |
+| `namespaced` | No | When `true`, resolve the slug at `@username/slug` instead of the flat URL. Unnecessary if the slug already starts with `@username/`. |
+| `theme` | No | `default`, `minimal`, `essay`, or `terminal`. Non-default themes are Pro-only. |
+| `hideBranding` | No | Hide the "Published with JotBird" footer. Enabling is Pro-only. |
+| `visibility` | No | `unlisted` (default), `public` (search-indexable), or `password` (Pro). Setting a visibility clears any previous password. |
+| `password` | No | Required with (and only valid with) `visibility: "password"`. Never echoed back. |
+
+At least one of `theme`, `hideBranding`, or `visibility` must be provided.
+
+Settings changes are reflected in the API immediately, but the live page can take up to about a minute to reflect a relaxed visibility (enabling password protection is instant). Theme and branding apply right away.
 
 ## Namespaced URLs (Pro)
 

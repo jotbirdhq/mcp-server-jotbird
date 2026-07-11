@@ -54,10 +54,16 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("listTools", () => {
-  it("returns publish, list_documents, and delete", async () => {
+  it("returns publish, list_documents, delete, get_settings, and update_settings", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name);
-    expect(names).toEqual(["publish", "list_documents", "delete"]);
+    expect(names).toEqual([
+      "publish",
+      "list_documents",
+      "delete",
+      "get_settings",
+      "update_settings",
+    ]);
   });
 
   it("publish requires markdown", async () => {
@@ -70,6 +76,14 @@ describe("listTools", () => {
     const { tools } = await client.listTools();
     const del = tools.find((t) => t.name === "delete")!;
     expect(del.inputSchema.required).toContain("slug");
+  });
+
+  it("settings tools require slug", async () => {
+    const { tools } = await client.listTools();
+    for (const name of ["get_settings", "update_settings"]) {
+      const tool = tools.find((t) => t.name === name)!;
+      expect(tool.inputSchema.required).toEqual(["slug"]);
+    }
   });
 });
 
@@ -179,6 +193,19 @@ describe("publish", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Validation error");
+  });
+
+  it("rejects settings keys instead of publishing with them silently dropped", async () => {
+    // Settings belong to update_settings. Stripping `theme` here would publish
+    // with the default theme and still report success.
+    const result = await client.callTool({
+      name: "publish",
+      arguments: { markdown: "# Test", theme: "essay" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Validation error");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -302,6 +329,22 @@ describe("delete", () => {
     expect(opts.method).toBe("DELETE");
   });
 
+  it("accepts an @username/slug identifier and infers namespaced", async () => {
+    mockFetchResponse({ ok: true });
+
+    const result = await client.callTool({
+      name: "delete",
+      arguments: { slug: "@clayton-myers/my-page" },
+    });
+
+    expect(textOf(result)).toBe('Deleted document "@clayton-myers/my-page".');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${TEST_API_BASE}/api/v1/documents?slug=my-page&namespaced=true`
+    );
+  });
+
   it("returns validation error when slug is missing", async () => {
     const result = await client.callTool({
       name: "delete",
@@ -310,6 +353,361 @@ describe("delete", () => {
 
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Validation error");
+  });
+
+  it("refuses a slug that normalizes to nothing rather than confirming a no-op delete", async () => {
+    // delete({slug:"@user/"}) used to request ?slug= and then print
+    // 'Deleted document "@user/".' — a success confirmation for nothing.
+    for (const slug of ["", "@user/"]) {
+      const result = await client.callTool({ name: "delete", arguments: { slug } });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).not.toContain("Deleted");
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects unknown keys", async () => {
+    const result = await client.callTool({
+      name: "delete",
+      arguments: { slug: "old-draft", force: true },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Validation error");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+const SETTINGS_VIEW = {
+  slug: "my-notes",
+  username: null,
+  url: "https://share.jotbird.com/my-notes",
+  title: "My Notes",
+  theme: "default",
+  hideBranding: false,
+  visibility: "unlisted",
+  tags: ["work", "drafts"],
+  expiresAt: null,
+};
+
+describe("get_settings", () => {
+  it("returns formatted settings", async () => {
+    mockFetchResponse(SETTINGS_VIEW);
+
+    const result = await client.callTool({
+      name: "get_settings",
+      arguments: { slug: "my-notes" },
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("Slug: my-notes");
+    expect(text).toContain("https://share.jotbird.com/my-notes");
+    expect(text).toContain("Theme: default");
+    expect(text).toContain("Branding: shown");
+    expect(text).toContain("Visibility: unlisted");
+    expect(text).toContain("Tags: work, drafts");
+    expect(text).toContain("Expires: never");
+
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${TEST_API_BASE}/api/v1/documents/my-notes/settings`);
+    expect(opts.method ?? "GET").toBe("GET");
+  });
+
+  it("resolves namespaced slugs and shows @username/slug", async () => {
+    mockFetchResponse({
+      ...SETTINGS_VIEW,
+      username: "clayton-myers",
+      url: "https://share.jotbird.com/@clayton-myers/my-notes",
+      theme: "essay",
+      hideBranding: true,
+    });
+
+    const result = await client.callTool({
+      name: "get_settings",
+      arguments: { slug: "my-notes", namespaced: true },
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("Slug: @clayton-myers/my-notes");
+    expect(text).toContain("Theme: essay");
+    expect(text).toContain("Branding: hidden");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${TEST_API_BASE}/api/v1/documents/my-notes/settings?namespaced=true`
+    );
+  });
+
+  it("shows (untitled) for a blank title rather than a bare 'Title:'", async () => {
+    mockFetchResponse({ ...SETTINGS_VIEW, title: "", tags: undefined });
+
+    const result = await client.callTool({
+      name: "get_settings",
+      arguments: { slug: "my-notes" },
+    });
+
+    expect(textOf(result)).toContain("Title: (untitled)");
+    // A legacy doc can come back without tags at all; don't render an empty line.
+    expect(textOf(result)).not.toContain("Tags:");
+  });
+
+  it("accepts the @username/slug identifier list_documents prints", async () => {
+    mockFetchResponse({ ...SETTINGS_VIEW, username: "clayton-myers" });
+
+    await client.callTool({
+      name: "get_settings",
+      arguments: { slug: "@clayton-myers/my-notes" },
+    });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `${TEST_API_BASE}/api/v1/documents/my-notes/settings?namespaced=true`
+    );
+  });
+
+  it("returns validation error when slug is missing", async () => {
+    const result = await client.callTool({
+      name: "get_settings",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Validation error");
+  });
+});
+
+describe("update_settings", () => {
+  it("pre-flights with GET, then PATCHes the settings", async () => {
+    mockFetchResponse(SETTINGS_VIEW); // pre-flight GET
+    mockFetchResponse({ ...SETTINGS_VIEW, theme: "minimal", hideBranding: true });
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", theme: "minimal", hideBranding: true },
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("Settings updated.");
+    expect(text).toContain("Theme: minimal");
+    expect(text).toContain("Branding: hidden");
+    // No visibility in the patch → no propagation note.
+    expect(text).not.toContain("up to about a minute");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [getUrl, getOpts] = fetchMock.mock.calls[0];
+    expect(getUrl).toBe(`${TEST_API_BASE}/api/v1/documents/my-notes/settings`);
+    expect(getOpts.method ?? "GET").toBe("GET");
+
+    const [patchUrl, patchOpts] = fetchMock.mock.calls[1];
+    expect(patchUrl).toBe(`${TEST_API_BASE}/api/v1/documents/my-notes/settings`);
+    expect(patchOpts.method).toBe("PATCH");
+    expect(JSON.parse(patchOpts.body)).toEqual({ theme: "minimal", hideBranding: true });
+  });
+
+  it("skips the PATCH when the pre-flight GET fails", async () => {
+    mockFetchResponse({ error: "Document not found" }, 404);
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "nope", theme: "minimal" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Document not found");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("sets password protection and notes the propagation delay", async () => {
+    mockFetchResponse(SETTINGS_VIEW);
+    mockFetchResponse({ ...SETTINGS_VIEW, visibility: "password" });
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", visibility: "password", password: "hunter2" },
+    });
+
+    const text = textOf(result);
+    expect(text).toContain("Visibility: password");
+    expect(text).toContain("up to about a minute");
+
+    const [, patchOpts] = fetchMock.mock.calls[1];
+    expect(JSON.parse(patchOpts.body)).toEqual({
+      visibility: "password",
+      password: "hunter2",
+    });
+  });
+
+  it("targets namespaced documents with namespaced=true", async () => {
+    mockFetchResponse({ ...SETTINGS_VIEW, username: "clayton-myers" });
+    mockFetchResponse({
+      ...SETTINGS_VIEW,
+      username: "clayton-myers",
+      visibility: "public",
+    });
+
+    await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", namespaced: true, visibility: "public" },
+    });
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toBe(
+        `${TEST_API_BASE}/api/v1/documents/my-notes/settings?namespaced=true`
+      );
+    }
+  });
+
+  it("rejects an empty patch without calling the API", async () => {
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("at least one setting");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a password without visibility 'password'", async () => {
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", visibility: "public", password: "hunter2" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('only valid with visibility "password"');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the password mistake even when the patch is otherwise empty", async () => {
+    // Chained .refine()s aborted at the first failure, so this used to surface
+    // only the generic "provide at least one setting" and never mentioned the
+    // password it was about to drop.
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", password: "hunter2" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('only valid with visibility "password"');
+    expect(textOf(result)).toContain("at least one setting");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown keys instead of silently dropping them", async () => {
+    // `tags` is the realistic trap: get_settings reports them, so a model tries
+    // to set them. Stripping the key would PATCH only the theme and still report
+    // "Settings updated", telling the user their tags were saved when they weren't.
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", theme: "minimal", tags: ["work"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Validation error");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renders cross-field validation errors without a stray double colon", async () => {
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes" },
+    });
+
+    expect(textOf(result)).not.toContain(": :");
+    expect(textOf(result)).toContain("Validation error: Provide at least one setting");
+  });
+
+  it("accepts an @username/slug identifier and infers namespaced", async () => {
+    // This is the string list_documents prints, so it's what a model passes back.
+    mockFetchResponse({ ...SETTINGS_VIEW, username: "clayton-myers" });
+    mockFetchResponse({
+      ...SETTINGS_VIEW,
+      username: "clayton-myers",
+      theme: "essay",
+    });
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "@clayton-myers/my-notes", theme: "essay" },
+    });
+
+    expect(textOf(result)).toContain("Theme: essay");
+    for (const call of fetchMock.mock.calls) {
+      expect(call[0]).toBe(
+        `${TEST_API_BASE}/api/v1/documents/my-notes/settings?namespaced=true`
+      );
+    }
+  });
+
+  it("re-applies identical settings instead of short-circuiting the write", async () => {
+    // Re-applying the same values is the documented way to repair drift and to
+    // finish a partially-applied patch ("a retry of the same PATCH is
+    // idempotent"), and the CLI always writes. An earlier revision skipped the
+    // PATCH when the values already matched, which quietly made MCP the one
+    // client that couldn't force a re-apply.
+    mockFetchResponse(SETTINGS_VIEW); // already theme=default, visibility=unlisted
+    mockFetchResponse(SETTINGS_VIEW);
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", theme: "default", visibility: "unlisted" },
+    });
+
+    expect(textOf(result)).toContain("Settings updated.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1].method).toBe("PATCH");
+  });
+
+  it("rejects a slug that normalizes to nothing", async () => {
+    // "@user/" splits to an EMPTY slug, which would request
+    // /api/v1/documents//settings if the length check ran before normalization.
+    for (const slug of ["", "   ", "@user/"]) {
+      const result = await client.callTool({
+        name: "update_settings",
+        arguments: { slug, theme: "minimal" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects visibility 'password' without a password", async () => {
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", visibility: "password" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("requires a non-empty password");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid theme without calling the API", async () => {
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", theme: "book" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Validation error");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the Pro-gated setting from a 403", async () => {
+    mockFetchResponse(SETTINGS_VIEW);
+    mockFetchResponse({ error: "Pro subscription required", setting: "theme" }, 403);
+
+    const result = await client.callTool({
+      name: "update_settings",
+      arguments: { slug: "my-notes", theme: "essay" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("Pro subscription required");
+    expect(textOf(result)).toContain("Pro required for: theme");
   });
 });
 

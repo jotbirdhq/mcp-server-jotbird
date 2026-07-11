@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-jotbird",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "MCP server for JotBird – publish Markdown documents from any LLM",
   "type": "module",
   "main": "./dist/index.js",
