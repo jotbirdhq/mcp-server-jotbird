@@ -91,9 +91,9 @@ const PublishArgs = z.object({
     .string()
     .optional()
     .describe(
-      "For flat documents: slug of an existing page to update. " +
-      "For namespaced documents (namespaced: true): required — publish at @username/slug. " +
-      "Omit (with namespaced: false/absent) to publish a new page with an auto-generated slug."
+      "Slug of an existing page to update. A slug that matches no page you own is IGNORED " +
+      "(the page publishes at an auto-generated slug) — it cannot name a NEW flat page. " +
+      "For namespaced documents (namespaced: true): required — publish at @username/slug."
     ),
   namespaced: z
     .boolean()
@@ -384,10 +384,12 @@ export function createServer(apiKey: string, apiBase: string): Server {
             slug: {
               type: "string",
               description:
-                "For flat documents: slug of an existing page to update. " +
-                "Omit to publish a new page with an auto-generated slug. " +
-                "For namespaced documents (namespaced: true): required — publish at @username/slug. " +
-                "Use list_documents to find slugs of existing pages.",
+                "Slug of an EXISTING page to update — NOT a way to choose the URL of a new " +
+                "page. If it does not match a page this account already owns, it is IGNORED " +
+                "and the page is published at an auto-generated slug instead, so never promise " +
+                "the user a URL you passed here — report the one the tool returns. " +
+                "Omit it to publish a new page. To choose a new page's URL, use namespaced: " +
+                "true together with a slug (Pro). Use list_documents to find existing slugs.",
             },
             namespaced: {
               type: "boolean",
@@ -476,8 +478,8 @@ export function createServer(apiKey: string, apiBase: string): Server {
           "sitemap), 'password' (Pro — requires the password argument; setting " +
           "a visibility clears any previous password). The API reflects changes " +
           "immediately, but the live page can take up to about a minute to " +
-          "reflect a relaxed visibility (enabling password protection is " +
-          "instant) — a briefly stale page is not a failed update.",
+          "reflect a visibility change as caches refresh — a briefly stale page " +
+          "is not a failed update.",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -626,7 +628,7 @@ export function createServer(apiKey: string, apiBase: string): Server {
           const note =
             patch.visibility !== undefined
               ? "\n\nNote: the live page can take up to about a minute to reflect " +
-                "a visibility change (enabling password protection is instant)."
+                "a visibility change as caches refresh."
               : "";
           return {
             content: [

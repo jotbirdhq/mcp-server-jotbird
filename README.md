@@ -10,7 +10,9 @@ Works with Claude, ChatGPT, Gemini, and any MCP-compatible client.
 
 ### 1. Get an API key
 
-Sign in at [jotbird.com](https://www.jotbird.com), open **Account > API keys**, and generate a key.
+Sign in at [jotbird.com](https://www.jotbird.com), open **Account Settings** from the account menu, and generate a key in the **API Keys** section.
+
+Your key starts with `jb_` and is **shown only once** — copy it before closing the dialog.
 
 ### 2. Add to your client
 
@@ -131,8 +133,14 @@ Publish Markdown content as a formatted web page with a shareable URL. To update
 |-----------|----------|-------------|
 | `markdown` | Yes | Markdown content (max 256 KB). Supports footnotes, task lists, definition lists, math (`$…$` and `$$…$$`), and inline HTML. |
 | `title` | No | Page title. If omitted, the first H1 in the Markdown is used. |
-| `slug` | No | For flat documents: slug of an existing page to update. Omit to publish a new page with an auto-generated slug. For namespaced documents (`namespaced: true`): required — publishes at `@username/slug`. Use `list_documents` to find slugs. |
+| `slug` | No | Slug of an **existing** page to update. Omit to publish a new page. For namespaced pages (`namespaced: true`): required — publishes at `@username/slug`. Use `list_documents` to find slugs. |
 | `namespaced` | No | When `true`, publish at your namespace: `share.jotbird.com/@username/slug`. Requires Pro and a username set in Account Settings. |
+
+> ⚠️ **`slug` cannot name a *new* page.** It identifies a page you already own, so that publishing
+> again updates it in place. If you pass a slug that matches no page on your account, it is
+> **silently ignored** and the page is published at an auto-generated slug
+> (`share.jotbird.com/brave-calm-meadow`) — so don't count on getting the URL you asked for.
+> New pages get a random slug; the way to choose a URL is a **namespaced** page (Pro), below.
 
 ### `list_documents`
 
@@ -171,9 +179,9 @@ Update a published page's settings. Only the fields you pass change; everything 
 | `visibility` | No | `unlisted` (default), `public` (search-indexable), or `password` (Pro). Setting a visibility clears any previous password. |
 | `password` | No | Required with (and only valid with) `visibility: "password"`. Never echoed back. |
 
-At least one of `theme`, `hideBranding`, or `visibility` must be provided.
+At least one of `theme`, `hideBranding`, or `visibility` must be provided. `tags` are reported by `get_settings` but can't be changed here — set them in the web app.
 
-Settings changes are reflected in the API immediately, but the live page can take up to about a minute to reflect a relaxed visibility (enabling password protection is instant). Theme and branding apply right away.
+Settings changes are reflected in the API immediately, but the live page can take up to about a minute to reflect a visibility change as caches refresh. Theme and branding apply right away. Turning password protection *on* takes effect immediately, so a page is never left readable while the change propagates.
 
 ## Namespaced URLs (Pro)
 
@@ -190,8 +198,21 @@ Namespaced pages never expire and keep the same URL across updates. Set your use
 |--|------|-----|
 | Published pages | 10 | Unlimited |
 | Publishes per hour | 10 | 100 |
+| Settings updates per hour | 10 | 100 |
 | Page expiration | 90 days | Never |
 | Max markdown size | 256 KB | 256 KB |
+
+A few things worth knowing:
+
+- **The 10-page cap counts *new* pages.** Updating a page you've already published is never blocked
+  by it, however many you have. Publishing an 11th new page on a free account fails with a "document
+  limit reached" error.
+- **`update_settings` is rate-limited in its own bucket**, separate from publishing, so changing
+  settings doesn't eat your publish quota. Reading (`get_settings`, `list_documents`) isn't limited
+  at all. When you hit a limit, the tool tells you how long to wait.
+- **Enabling a Pro-only setting on a free account fails and names the setting**, so your AI can tell
+  you exactly what needs an upgrade. Free accounts can always *clear* Pro settings
+  (`theme: "default"`, `hideBranding: false`) and switch between `unlisted` and `public`.
 
 ## Environment variables
 
@@ -204,14 +225,18 @@ Namespaced pages never expire and keep the same URL across updates. Set your use
 
 ```bash
 npm install
-npm run build
+npm run build     # tsc → dist/
+npm test          # vitest
 ```
 
-Test locally:
+Run the server against your account (it speaks MCP over stdio, so it will sit waiting for a
+client — that's what a successful start looks like):
 
 ```bash
 JOTBIRD_API_KEY=jb_your_key node dist/index.js
 ```
+
+Point it at a different backend with `JOTBIRD_API_URL`.
 
 ## License
 
